@@ -1,16 +1,16 @@
 import type { ExternalPluginConfig } from '@windy/interfaces';
 
 const config: ExternalPluginConfig = {
-    name: 'windy-plugin-my-plugin',
+    name: 'windy-plugin-uav-wmocs',
     version: '0.1.0',
-    icon: '🔌',
-    title: 'This is my first plugin',
-    description: 'This is my first plugin.',
-    author: 'John Doe (optional company name)',
+    icon: '🚁',
+    title: 'UAV WMOCS',
+    description: 'Used to display WMOCS data for UAV operations',
+    author: 'Byweather (optional company name)',
     repository: 'https://github.com/windycom/windy-plugin-template',
     desktopUI: 'rhpane',
     mobileUI: 'fullscreen',
-    routerPath: '/my-plugin',
+    routerPath: '/uav-wmocs',
     private: true,
 };
 
