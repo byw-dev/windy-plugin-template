@@ -32,6 +32,7 @@
 </section>
 <script lang="ts">
     import bcast from '@windy/broadcast';
+    import { map } from '@windy/map';
     import { onDestroy, onMount } from 'svelte';
 
     import config from './pluginConfig';
@@ -63,6 +64,7 @@
     };
 
     const PLANE_TRACK_STORE: Map<string, PlaneTrack[]> = new Map();
+    const PLANE_LAYER_STORE: Map<string, L.Polyline> = new Map();
 
     let latestTrack: string = '无事发生';
 
@@ -100,6 +102,31 @@
                     PLANE_TRACK_STORE.set(planeID, previousTracks);
                     latestTrack = trackToString(data);
                     console.log(previousTracks);
+
+                    const duration = data.alt || 0;
+                    const color = `hsl(${(duration / 10 + 60) % 360}, 100%, 45%)`;
+                    const trackPoints = previousTracks.map(t => L.latLng(t.lat, t.lon, t.alt));
+                    PLANE_LAYER_STORE.forEach((value, key) => {
+                        if (key !== planeID) {
+                            map.removeLayer(value);
+                            PLANE_LAYER_STORE.delete(key);
+                        }
+                    })
+                    let polyline = PLANE_LAYER_STORE.get(planeID);
+                    if (polyline) {
+                        polyline.addLatLng(trackPoints)
+                    } else {
+
+                        polyline = new L.Polyline(trackPoints, {
+                            color,
+                            weight: 2,
+                        });
+                        polyline.addTo(map);
+                    }
+
+
+                    // polyline.on('mouseover', () => polyline.setStyle({ weight: 4 }));
+                    // polyline.on('mouseout', () => polyline.setStyle({ weight: 2 }));
                 });
         } catch (error) {
             console.error('Error fetching plane track data:', error);
