@@ -45,6 +45,7 @@
     import bcast from '@windy/broadcast';
     import { map } from '@windy/map';
     import { onDestroy, onMount } from 'svelte';
+    import { createPlaneIcon } from './planeIcon';
 
     import config from './pluginConfig';
     const { title } = config;
@@ -78,6 +79,10 @@
     let latestPosition: [number, number] | null = null;
     const pollingIntervalMs = 3000;
 
+    // 飞机标记
+    let planeMarker: L.Marker | null = null;
+    let currentMarkerPlaneId: string | null = null;
+
     $: showTrackButton = hasData && lastPollOk;
 
     export const onopen = (_params: unknown) => {
@@ -97,6 +102,7 @@
 
     onDestroy(() => {
         stopPolling(false);
+        if (planeMarker) { map.removeLayer(planeMarker); planeMarker = null; currentMarkerPlaneId = null; }
         console.log('Plugin destroyed');
     });
 
@@ -153,10 +159,32 @@
             polyline.setLatLngs(trackPoints);
         }
 
-        // 最新位置
+        // 最新位置与飞机标记
         if (previousTracks.length > 0) {
             const last = previousTracks[previousTracks.length - 1];
             latestPosition = [last.lat, last.lon];
+
+            // 若切换了 planeID，移除旧标记
+            if (currentMarkerPlaneId && currentMarkerPlaneId !== planeID && planeMarker) {
+                map.removeLayer(planeMarker);
+                planeMarker = null;
+            }
+            if (!planeMarker) {
+                planeMarker = L.marker(L.latLng(last.lat, last.lon), { icon: createPlaneIcon() });
+                planeMarker.addTo(map);
+                currentMarkerPlaneId = planeID;
+            } else {
+                planeMarker.setLatLng([last.lat, last.lon]);
+            }
+            // 设置朝向
+            const el = planeMarker.getElement();
+            if (el) {
+                const rot = el.querySelector('.plane-rot') as HTMLElement | null;
+                if (rot) {
+                    rot.style.transformOrigin = '50% 50%';
+                    rot.style.transform = `rotate(${last.heading}deg)`;
+                }
+            }
         }
 
         hasData = previousTracks.length > 0;
@@ -171,4 +199,6 @@
 <style lang="less">
   // Put any LESS of CSS styles here
   .btn-row { display: flex; gap: 10px; align-items: center; }
+  .plane-icon { pointer-events: none; }
+  .plane-icon .plane-rot { transform-origin: 50% 50%; }
 </style>
