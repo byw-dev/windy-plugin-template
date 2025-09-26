@@ -54,7 +54,7 @@
 
     const trackToString = (t: PlaneTrack): string => {
         if (!t) return 'No track data available.';
-        const dt = new Date(t.timestamp * 1e3).toISOString();
+        const dt = new Date(t.timestamp * 1e3).toISOString().split('.')[0];
         return `PlaneID: ${t.id}\n\n        Time: ${dt}\n\n        ${('duration' in t) ? `Duration: ${(t as any).duration}s\n` : ''}
         Lat: ${t.lat}°\n\n        Lon: ${t.lon}°\n\n        Alt: ${t.alt}m\n\n        Speed: ${t.speed}m/s\n\n        Heading: ${t.heading}°\n\n        `;
     };
@@ -144,23 +144,36 @@
         latestTrack = trackToString(data);
 
         // 更新折线
-        const duration = (data as any).alt || 0;
-        const color = `hsl(${(duration / 10 + 60) % 360}, 100%, 45%)`;
-        const trackPoints = previousTracks.map(t => L.latLng(t.lat, t.lon, t.alt));
+        const trackPoints = previousTracks.map(t => {
+            // 按高度修改颜色，取值范围 [0, 6000]
+            const altitudeRatio = Math.min(t.alt / 6000, 1); // 限制最大值为 1
+            const hue = (1 - altitudeRatio) * 120; // 高度越高，越红（0），高度越低，越绿（120）
+            const color = `hsl(${hue}, 100%, 50%)`; // 固定明度为 50%
+
+            return {
+                latLng: L.latLng(t.lat, t.lon, t.alt),
+                color
+            };
+        });
 
         // 清理其它飞机图层
         PLANE_LAYER_STORE.forEach((value, key) => {
             if (key !== flightID_planeID) { map.removeLayer(value); PLANE_LAYER_STORE.delete(key); }
         });
 
-        let polyline = PLANE_LAYER_STORE.get(flightID_planeID);
-        if (!polyline) {
-            polyline = new L.Polyline(trackPoints, { color, weight: 2 });
-            polyline.addTo(map);
-            PLANE_LAYER_STORE.set(flightID_planeID, polyline);
-        } else {
-            polyline.setLatLngs(trackPoints);
-        }
+        // 使用多个 Polyline 实现分段着色
+        trackPoints.reduce((prev, curr) => {
+            if (prev) {
+
+                const segment = L.polyline([prev.latLng, curr.latLng], {
+                    color: prev.color,
+                    weight: 2
+                });
+                segment.addTo(map);
+                PLANE_LAYER_STORE.set(flightID_planeID, segment);
+            }
+            return curr;
+        }, null);
 
         // 最新位置与飞机标记
         if (previousTracks.length > 0) {
@@ -204,4 +217,5 @@
   .btn-row { display: flex; gap: 10px; align-items: center; }
   .plane-icon { pointer-events: none; }
   .plane-icon .plane-rot { transform-origin: 50% 50%; }
+  .tooltip { pointer-events: none; }
 </style>
