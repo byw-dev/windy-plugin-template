@@ -9,16 +9,28 @@
         { title }
     </div>
 
-    <label for="baseURL" class="mb-5">Base URL:
-        <input id="baseURL" type="text" placeholder="API baseURL..." class="input mb-20"
-               bind:value={props.baseURL}
-               on:input={() => { try { localStorage.setItem(LS_BASE_URL_KEY, props.baseURL || ''); } catch (e) {} }} />
-    </label>
-    <label for="flightID_planeID" class="mb-5">FlightID_PlaneID:
-        <input id="flightID_planeID" type="text" placeholder="FlightID_PlaneID here..." class="input mb-20"
-               bind:value={props.flightID_planeID}
-               on:input={() => { try { localStorage.setItem(LS_FLIGHT_ID_PLANE_ID_KEY, props.flightID_planeID || ''); } catch (e) {} }} />
-    </label>
+    <div class="form-group size-m m-2 left">
+        <label for="baseURL" class="m-2">Base URL:
+            <input id="baseURL" type="text" placeholder="API baseURL..." class="input mb-20"
+                   bind:value={props.baseURL}
+                   on:input={() => { try { localStorage.setItem(LS_BASE_URL_KEY, props.baseURL || ''); } catch (e) {} }} />
+        </label>
+        <label for="uavAssertID" class="m-2">UAV Assert ID:
+            <input id="uavAssertID" type="text" placeholder="UAV Assert ID here..." class="input mb-20"
+                   bind:value={props.uavAssertID}
+                   on:input={() => { try { localStorage.setItem(LS_UAV_ASSERT_ID_KEY, props.uavAssertID || ''); } catch (e) {} }} />
+        </label>
+        <button class="button button--variant-blue size-m centered"
+                on:click={() => { if (!isGeoJsonLoaded) loadAsserts(props.uavAssertID); else unloadAsserts(); }}>
+            { isGeoJsonLoaded ? 'Unload' : 'Load' }
+        </button>
+        <label for="flightID_planeID" class="m-2">FlightID_PlaneID:
+            <input id="flightID_planeID" type="text" placeholder="FlightID_PlaneID here..." class="input mb-20"
+                   bind:value={props.flightID_planeID}
+                   on:input={() => { try { localStorage.setItem(LS_FLIGHT_ID_PLANE_ID_KEY, props.flightID_planeID || ''); } catch (e) {} }} />
+        </label>
+    </div>
+
 
     <div class="btn-row">
         <button class="button button--variant-blue size-m"
@@ -48,6 +60,7 @@
     import { createPlaneIcon } from './planeIcon';
 
     import config from './pluginConfig';
+
     const { title } = config;
 
     import type { Properties, PlaneResult, PlaneTrack } from './pluginTypes';
@@ -55,13 +68,14 @@
     const trackToString = (t: PlaneTrack): string => {
         if (!t) return 'No track data available.';
         const dt = new Date(t.timestamp * 1e3).toISOString().split('.')[0];
-        return `PlaneID: ${t.id}\n\n        Time: ${dt}\n\n        ${('duration' in t) ? `Duration: ${(t as any).duration}s\n` : ''}
+        return `        PlaneID: ${t.id}\n\n        Time: ${dt}\n\n        ${('duration' in t) ? `Duration: ${(t as any).duration}s\n` : ''}
         Lat: ${t.lat}°\n\n        Lon: ${t.lon}°\n\n        Alt: ${t.alt}m\n\n        Speed: ${t.speed}m/s\n\n        Heading: ${t.heading}°\n\n        `;
     };
 
     // localStorage 键
     const LS_BASE_URL_KEY = 'windy-plugin.baseURL';
     const LS_FLIGHT_ID_PLANE_ID_KEY = 'windy-plugin.flightID_planeID';
+    const LS_UAV_ASSERT_ID_KEY = 'windy-plugin.uavAssertID';
 
     const props: Properties = { baseURL: '', flightID_planeID: '' };
 
@@ -83,6 +97,9 @@
     let planeMarker: L.Marker | null = null;
     let currentMarkerPlaneId: string | null = null;
 
+    // GeoJson 状态
+    let isGeoJsonLoaded = false;
+
     $: showTrackButton = hasData && lastPollOk;
 
     export const onopen = (_params: unknown) => {
@@ -94,15 +111,22 @@
         try {
             const bu = localStorage.getItem(LS_BASE_URL_KEY);
             const pid = localStorage.getItem(LS_FLIGHT_ID_PLANE_ID_KEY);
+            const uid = localStorage.getItem(LS_UAV_ASSERT_ID_KEY);
             if (bu !== null) props.baseURL = bu;
             if (pid !== null) props.flightID_planeID = pid;
-        } catch (e) {}
+            if (uid !== null) props.uavAssertID = uid;
+        } catch (e) {
+        }
         console.log('Plugin mounted');
     });
 
     onDestroy(() => {
         stopPolling(false);
-        if (planeMarker) { map.removeLayer(planeMarker); planeMarker = null; currentMarkerPlaneId = null; }
+        if (planeMarker) {
+            map.removeLayer(planeMarker);
+            planeMarker = null;
+            currentMarkerPlaneId = null;
+        }
         console.log('Plugin destroyed');
     });
 
@@ -113,16 +137,121 @@
         fetchPlaneTrack(props.flightID_planeID).then(() => {
             isPolling = true;
             pollTimer = window.setInterval(async () => {
-                try { await fetchPlaneTrack(props.flightID_planeID); }
-                catch (e) { stopPolling(true); }
+                try {
+                    await fetchPlaneTrack(props.flightID_planeID);
+                } catch (e) {
+                    stopPolling(true);
+                }
             }, pollingIntervalMs);
-        }).catch(() => { stopPolling(true); });
+        }).catch(() => {
+            stopPolling(true);
+        });
     }
 
     function stopPolling(dueToError: boolean) {
-        if (pollTimer !== null) { clearInterval(pollTimer); pollTimer = null; }
+        if (pollTimer !== null) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+        }
         isPolling = false;
-        if (dueToError) { lastPollOk = false; centerOnPlane = false; }
+        if (dueToError) {
+            lastPollOk = false;
+            centerOnPlane = false;
+        }
+    }
+
+    const calc_circle_radius = () => {
+        const currentZoom = map.getZoom();
+        return Math.max(2, 8 * (currentZoom / 10));
+    };
+
+    async function loadAsserts(uavAssertID: string) {
+        const apiURL = `${props.baseURL}/geojson/${uavAssertID}`;
+        if (isGeoJsonLoaded) {
+            unloadAsserts();
+            return;
+        }
+
+        const resp = await fetch(apiURL);
+        if (!resp.ok) throw new Error(`HTTP error! status: ${resp.status}`);
+        const data = await resp.json();
+
+        // 处理 GeoJSON 数据
+        L.geoJSON(data, {
+            pointToLayer: (feature, latlng) => {
+                const radius = calc_circle_radius();
+                // 自定义 Point 类型的样式
+                if (feature.geometry.type === 'Point') {
+                    const color = feature.properties.color || 'rgba(0, 255, 0, 0.5)';
+                    return L.circleMarker(latlng, {
+                        // radius: 10, // 小圆圈的半径
+                        radius: radius, // 小圆圈的半径
+                        // fillColor: 'rgba(0, 255, 0, 0.5)', // 绿色半透明
+                        // color: 'rgba(0, 255, 0, 0.5)', // 边框颜色与填充颜色一致
+                        fillColor: color, // 绿色半透明
+                        color: color, // 边框颜色与填充颜色一致
+                        weight: 2, // 边框宽度
+                        opacity: 1, // 边框不透明度
+                        fillOpacity: 0.5, // 填充透明度
+                    });
+                }
+                return null; // 非 Point 类型不处理
+            },
+            onEachFeature: (feature, layer) => {
+                // 为每个特征添加 tooltip
+                if (feature.properties && feature.properties.name) {
+                    if (feature.geometry.type === 'Point') {
+                        layer.bindTooltip(feature.properties.name, {
+                            sticky: true,
+                            direction: 'right',
+                            offset: [10, 0],
+                        });
+                    }
+                }
+            },
+        }).addTo(map);
+        isGeoJsonLoaded = true;
+
+        // 确保 Point 类型在最上层
+        map.eachLayer((layer) => {
+            if (layer instanceof L.CircleMarker) {
+                layer.bringToFront();
+            }
+        });
+
+        // 动态调整 CircleMarker 的大小
+        map.on('zoomend', () => {
+            map.eachLayer((layer) => {
+                if (layer instanceof L.CircleMarker) {
+                    const newRadius = calc_circle_radius(); // 根据缩放级别调整半径
+                    layer.setRadius(newRadius);
+                }
+            });
+        });
+        // 按GeoJson 里的第一个 Point 点居中显示地图
+        if (data.features && data.features.length > 0) {
+            const firstPoint = data.features.find((f: any) => f.geometry.type === 'Point');
+            if (firstPoint) {
+                const [lon, lat] = firstPoint.geometry.coordinates;
+                const currentZoom = map.getZoom();
+                if (currentZoom < 8) {
+                    map.setView(L.latLng(lat, lon), 8);
+                } else {
+                    map.setView(L.latLng(lat, lon), currentZoom);
+                }
+            }
+        }
+    }
+
+    function unloadAsserts() {
+        // 卸载 GeoJSON 数据
+        map.eachLayer((layer) => {
+            // 只移除我们添加的图层，避免移除其他重要图层
+            if (layer instanceof L.GeoJSON) {
+                map.removeLayer(layer);
+            }
+        });
+        isGeoJsonLoaded = false;
     }
 
     async function fetchPlaneTrack(flightID_planeID: string): Promise<void> {
@@ -152,13 +281,16 @@
 
             return {
                 latLng: L.latLng(t.lat, t.lon, t.alt),
-                color
+                color,
             };
         });
 
         // 清理其它飞机图层
         PLANE_LAYER_STORE.forEach((value, key) => {
-            if (key !== flightID_planeID) { map.removeLayer(value); PLANE_LAYER_STORE.delete(key); }
+            if (key !== flightID_planeID) {
+                map.removeLayer(value);
+                PLANE_LAYER_STORE.delete(key);
+            }
         });
 
         // 使用多个 Polyline 实现分段着色
@@ -167,7 +299,7 @@
 
                 const segment = L.polyline([prev.latLng, curr.latLng], {
                     color: prev.color,
-                    weight: 2
+                    weight: 2,
                 });
                 segment.addTo(map);
                 PLANE_LAYER_STORE.set(flightID_planeID, segment);
@@ -214,8 +346,21 @@
 
 <style lang="less">
   // Put any LESS of CSS styles here
-  .btn-row { display: flex; gap: 10px; align-items: center; }
-  .plane-icon { pointer-events: none; }
-  .plane-icon .plane-rot { transform-origin: 50% 50%; }
-  .tooltip { pointer-events: none; }
+  .btn-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .plane-icon {
+    pointer-events: none;
+  }
+
+  .plane-icon .plane-rot {
+    transform-origin: 50% 50%;
+  }
+
+  .tooltip {
+    pointer-events: none;
+  }
 </style>
