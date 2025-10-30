@@ -255,7 +255,12 @@
     }
 
     async function fetchPlaneTrack(flightID_planeID: string): Promise<void> {
-        const apiURL = `${props.baseURL}/track/${flightID_planeID}/all`;
+        // 如果 flightID_planeID 中包含特殊字符反斜杠 '\'，需要进行编码
+        let trackFilename = flightID_planeID;
+        if (flightID_planeID.includes('\\')) {
+            trackFilename = encodeURIComponent(flightID_planeID);
+        }
+        const apiURL = `${props.baseURL}/track/${trackFilename}/all`;
         const previousTracks = PLANE_TRACK_STORE.get(flightID_planeID) || [];
         const lastTrack = previousTracks.length > 0 ? previousTracks[previousTracks.length - 1] : null;
         console.log('Fetching from', apiURL, 'with last track', lastTrack);
