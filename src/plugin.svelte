@@ -676,7 +676,7 @@
     pointer-events: none;
   }
 
-  // 回放控件样式 (plan01.md)
+  /* 回放控件样式 (plan01.md) */
   .playback-controls {
     margin-top: 15px;
     padding: 10px;
