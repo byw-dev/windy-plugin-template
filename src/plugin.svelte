@@ -51,6 +51,66 @@
         {/if}
     </div>
 
+    {#if hasData}
+        <div class="playback-controls">
+            <input
+                type="range"
+                class="playback-slider"
+                min="0"
+                max={currentTracks.length - 1}
+                bind:value={playbackIndex}
+                on:input={handleSliderInput}
+                on:change={handleSliderChange}
+            />
+            <div class="playback-time">
+                {#if currentTracks.length > 0 && effectiveIndex >= 0 && effectiveIndex < currentTracks.length}
+                    {new Date(currentTracks[effectiveIndex].timestamp * 1000).toISOString().split('.')[0].replace('T', ' ')}
+                {/if}
+            </div>
+            <div class="playback-buttons">
+                <button
+                    class="playback-btn"
+                    on:click={handleBackClick}
+                    on:mousedown={handleBackMouseDown}
+                    on:mouseup={handleBackMouseUp}
+                    on:mouseleave={handleBackMouseUp}
+                    title="后退"
+                >
+                    <svg viewBox="0 0 24 24" width="24" height="24" xmlns="http://www.w3.org/2000/svg">
+                        <path fill="currentColor" d="M6 6h2v12H6V6zm3.5 6l8.5 6V6l-8.5 6z"/>
+                    </svg>
+                </button>
+                <button
+                    class="playback-btn play-btn"
+                    on:click={togglePlayPause}
+                    title={isPlaying ? '暂停' : '播放'}
+                >
+                    {#if isPlaying}
+                        <svg viewBox="0 0 24 24" width="24" height="24" xmlns="http://www.w3.org/2000/svg">
+                            <path fill="currentColor" d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+                        </svg>
+                    {:else}
+                        <svg viewBox="0 0 24 24" width="24" height="24" xmlns="http://www.w3.org/2000/svg">
+                            <path fill="currentColor" d="M8 5v14l11-7L8 5z"/>
+                        </svg>
+                    {/if}
+                </button>
+                <button
+                    class="playback-btn"
+                    on:click={handleForwardClick}
+                    on:mousedown={handleForwardMouseDown}
+                    on:mouseup={handleForwardMouseUp}
+                    on:mouseleave={handleForwardMouseUp}
+                    title="前进"
+                >
+                    <svg viewBox="0 0 24 24" width="24" height="24" xmlns="http://www.w3.org/2000/svg">
+                        <path fill="currentColor" d="M6 18l8.5-6L6 6v12zm8.5 0h2V6h-2v12z"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    {/if}
+
     <pre class="text mb-40">{latestTrack}</pre>
 </section>
 <script lang="ts">
@@ -105,11 +165,240 @@
     // GeoJson 状态
     let isGeoJsonLoaded = false;
 
+    // 回放状态 (plan01.md 2.1)
+    let isPlaybackMode = false;      // 模式开关：false=实时模式, true=回放模式
+    let playbackIndex = -1;          // 当前轨迹点索引，-1 表示实时模式（最新位置）
+    let isPlaying = false;           // 播放状态：true=自动播放中, false=暂停
+    let playbackTimer: number | null = null;      // 自动播放计时器
+    let fastForwardTimer: number | null = null;   // 长按快进/快退计时器
+
+    // 获取当前飞机的轨迹数据
+    $: currentTracks = props.flightID_planeID ? (PLANE_TRACK_STORE.get(props.flightID_planeID) || []) : [];
+    // 计算有效的播放索引（-1时使用最后一个）
+    $: effectiveIndex = playbackIndex === -1 ? (currentTracks.length > 0 ? currentTracks.length - 1 : 0) : playbackIndex;
+
     $: showTrackButton = hasData && lastPollOk;
 
     export const onopen = (_params: unknown) => {
         console.log('Plugin opened with params:', _params);
     };
+
+    // ========== 回放控制函数 (plan01.md 2.3, 2.4) ==========
+
+    /**
+     * 统一的地图显示更新函数
+     * @param isDragging - 是否正在拖动滑块（true时只移动飞机，不重绘轨迹线）
+     */
+    function updateMapDisplay(isDragging = false) {
+        const tracks = currentTracks;
+        if (tracks.length === 0) return;
+
+        // 获取当前有效索引
+        const idx = effectiveIndex;
+        if (idx < 0 || idx >= tracks.length) return;
+
+        const currentTrack = tracks[idx];
+
+        // 更新飞机图标位置和朝向
+        if (planeMarker) {
+            planeMarker.setLatLng([currentTrack.lat, currentTrack.lon]);
+            const el = planeMarker.getElement();
+            if (el) {
+                const rot = el.querySelector('.plane-rot') as HTMLElement | null;
+                if (rot) {
+                    rot.style.transformOrigin = '50% 50%';
+                    rot.style.transform = `rotate(${currentTrack.heading}deg)`;
+                }
+            }
+        }
+
+        // 更新显示的航迹信息
+        latestTrack = trackToString(currentTrack);
+
+        // 如果不是拖动中，重绘轨迹线
+        if (!isDragging) {
+            // 清除旧的轨迹线段
+            PLANE_LAYER_STORE.forEach((segment) => {
+                map.removeLayer(segment);
+            });
+            PLANE_LAYER_STORE.clear();
+
+            // 渲染从0到当前索引的轨迹
+            const trackPoints = tracks.slice(0, idx + 1).map(t => {
+                const altitudeRatio = Math.min(t.alt / 6000, 1);
+                const hue = (1 - altitudeRatio) * 120;
+                const color = `hsl(${hue}, 100%, 50%)`;
+                return {
+                    latLng: L.latLng(t.lat, t.lon, t.alt),
+                    color,
+                };
+            });
+
+            trackPoints.reduce((prev, curr, i) => {
+                if (prev) {
+                    const segment = L.polyline([prev.latLng, curr.latLng], {
+                        color: prev.color,
+                        weight: 2,
+                    });
+                    segment.addTo(map);
+                    PLANE_LAYER_STORE.set(`${props.flightID_planeID}_${i}`, segment);
+                }
+                return curr;
+            }, null as { latLng: L.LatLng; color: string; } | null);
+        }
+
+        // 更新最新位置（用于 Track 按钮）
+        latestPosition = [currentTrack.lat, currentTrack.lon];
+    }
+
+    // 进度条拖动时 (on:input) - 只移动飞机图标
+    function handleSliderInput(event: Event) {
+        const target = event.target as HTMLInputElement;
+        const idx = parseInt(target.value, 10);
+        if (isNaN(idx)) return;
+
+        isPlaybackMode = true;
+        isPlaying = false;
+        stopPlaybackTimer();
+        playbackIndex = idx;
+
+        updateMapDisplay(true); // 只移动飞机
+    }
+
+    // 进度条拖动结束 (on:change) - 重绘轨迹线
+    function handleSliderChange(event: Event) {
+        const target = event.target as HTMLInputElement;
+        const idx = parseInt(target.value, 10);
+        if (isNaN(idx)) return;
+
+        playbackIndex = idx;
+        updateMapDisplay(false); // 重绘轨迹
+    }
+
+    // 播放/暂停按钮
+    function togglePlayPause() {
+        isPlaybackMode = true;
+        isPlaying = !isPlaying;
+
+        if (isPlaying) {
+            // 如果索引为-1，从头开始播放
+            if (playbackIndex === -1) {
+                playbackIndex = 0;
+            }
+            startPlaybackTimer();
+        } else {
+            stopPlaybackTimer();
+        }
+    }
+
+    // 启动自动播放计时器
+    function startPlaybackTimer() {
+        if (playbackTimer !== null) return;
+
+        playbackTimer = window.setInterval(() => {
+            if (playbackIndex < currentTracks.length - 1) {
+                playbackIndex++;
+                updateMapDisplay(false);
+            } else {
+                // 到达末尾，切换回实时模式
+                exitPlaybackMode();
+            }
+        }, 1000); // 每秒1个点
+    }
+
+    // 停止自动播放计时器
+    function stopPlaybackTimer() {
+        if (playbackTimer !== null) {
+            clearInterval(playbackTimer);
+            playbackTimer = null;
+        }
+    }
+
+    // 退出回放模式，返回实时模式
+    function exitPlaybackMode() {
+        stopPlaybackTimer();
+        stopFastForwardTimer();
+        isPlaybackMode = false;
+        isPlaying = false;
+        playbackIndex = -1;
+        updateMapDisplay(false);
+    }
+
+    // 后退按钮单击
+    function handleBackClick() {
+        isPlaybackMode = true;
+        isPlaying = false;
+        stopPlaybackTimer();
+
+        // 如果是实时模式，切换到最后一个点
+        if (playbackIndex === -1) {
+            playbackIndex = currentTracks.length - 1;
+        }
+
+        if (playbackIndex > 0) {
+            playbackIndex--;
+            updateMapDisplay(false);
+        }
+    }
+
+    // 后退按钮长按开始
+    function handleBackMouseDown() {
+        fastForwardTimer = window.setInterval(() => {
+            if (playbackIndex > 0) {
+                playbackIndex--;
+                updateMapDisplay(false);
+            } else {
+                stopFastForwardTimer();
+            }
+        }, 100); // 每秒10个点
+    }
+
+    // 后退按钮长按结束
+    function handleBackMouseUp() {
+        stopFastForwardTimer();
+    }
+
+    // 前进按钮单击
+    function handleForwardClick() {
+        isPlaybackMode = true;
+        isPlaying = false;
+        stopPlaybackTimer();
+
+        // 如果是实时模式，从头开始
+        if (playbackIndex === -1) {
+            playbackIndex = 0;
+        }
+
+        if (playbackIndex < currentTracks.length - 1) {
+            playbackIndex++;
+            updateMapDisplay(false);
+        }
+    }
+
+    // 前进按钮长按开始
+    function handleForwardMouseDown() {
+        fastForwardTimer = window.setInterval(() => {
+            if (playbackIndex < currentTracks.length - 1) {
+                playbackIndex++;
+                updateMapDisplay(false);
+            } else {
+                stopFastForwardTimer();
+            }
+        }, 100); // 每秒10个点
+    }
+
+    // 前进按钮长按结束
+    function handleForwardMouseUp() {
+        stopFastForwardTimer();
+    }
+
+    // 停止快进/快退计时器
+    function stopFastForwardTimer() {
+        if (fastForwardTimer !== null) {
+            clearInterval(fastForwardTimer);
+            fastForwardTimer = null;
+        }
+    }
 
     onMount(() => {
         // 读取本地存储
@@ -127,6 +416,8 @@
 
     onDestroy(() => {
         stopPolling(false);
+        stopPlaybackTimer();
+        stopFastForwardTimer();
         if (planeMarker) {
             map.removeLayer(planeMarker);
             planeMarker = null;
@@ -316,71 +607,40 @@
             latestTrack = trackToString(data);
             lastPollOk = true;
 
-            // 更新折线
-            const trackPoints = previousTracks.map(t => {
-                // 按高度修改颜色，取值范围 [0, 6000]
-                const altitudeRatio = Math.min(t.alt / 6000, 1); // 限制最大值为 1
-                const hue = (1 - altitudeRatio) * 120; // 高度越高，越红（0），高度越低，越绿（120）
-                const color = `hsl(${hue}, 100%, 50%)`; // 固定明度为 50%
+            // 如果不在回放模式，使用 updateMapDisplay 更新视图
+            if (!isPlaybackMode) {
+                // 先确保飞机标记存在
+                if (previousTracks.length > 0) {
+                    const last = previousTracks[previousTracks.length - 1];
+                    latestPosition = [last.lat, last.lon];
 
-                return {
-                    latLng: L.latLng(t.lat, t.lon, t.alt),
-                    color,
-                };
-            });
-
-            // 清理其它飞机图层
-            PLANE_LAYER_STORE.forEach((value, key) => {
-                if (key !== flightID_planeID) {
-                    map.removeLayer(value);
-                    PLANE_LAYER_STORE.delete(key);
+                    // 若切换了 flightID_planeID，移除旧标记
+                    if (currentMarkerPlaneId && currentMarkerPlaneId !== flightID_planeID && planeMarker) {
+                        map.removeLayer(planeMarker);
+                        planeMarker = null;
+                    }
+                    if (!planeMarker) {
+                        planeMarker = L.marker(L.latLng(last.lat, last.lon), { icon: createPlaneIcon() });
+                        planeMarker.addTo(map);
+                        currentMarkerPlaneId = flightID_planeID;
+                    }
                 }
-            });
 
-            // 使用多个 Polyline 实现分段着色
-            trackPoints.reduce((prev, curr) => {
-                if (prev) {
+                // 使用统一的渲染函数更新显示
+                updateMapDisplay(false);
 
-                    const segment = L.polyline([prev.latLng, curr.latLng], {
-                        color: prev.color,
-                        weight: 2,
-                    });
-                    segment.addTo(map);
-                    PLANE_LAYER_STORE.set(flightID_planeID, segment);
+                if (centerOnPlane && latestPosition) {
+                    map.setView(L.latLng(latestPosition[0], latestPosition[1]), map.getZoom());
                 }
-                return curr;
-            }, null as { latLng: L.LatLng; color: string; } | null);
-
-            // 最新位置与飞机标记
-            if (previousTracks.length > 0) {
-                const last = previousTracks[previousTracks.length - 1];
-                latestPosition = [last.lat, last.lon];
-
-                // 若切换了 flightID_planeID，移除旧标记
-                if (currentMarkerPlaneId && currentMarkerPlaneId !== flightID_planeID && planeMarker) {
-                    map.removeLayer(planeMarker);
-                    planeMarker = null;
-                }
-                if (!planeMarker) {
+            } else {
+                // 在回放模式下，只更新数据，不改变显示
+                // 但要确保飞机标记存在
+                if (previousTracks.length > 0 && !planeMarker) {
+                    const last = previousTracks[previousTracks.length - 1];
                     planeMarker = L.marker(L.latLng(last.lat, last.lon), { icon: createPlaneIcon() });
                     planeMarker.addTo(map);
                     currentMarkerPlaneId = flightID_planeID;
-                } else {
-                    planeMarker.setLatLng([last.lat, last.lon]);
                 }
-                // 设置朝向
-                const el = planeMarker.getElement();
-                if (el) {
-                    const rot = el.querySelector('.plane-rot') as HTMLElement | null;
-                    if (rot) {
-                        rot.style.transformOrigin = '50% 50%';
-                        rot.style.transform = `rotate(${last.heading}deg)`;
-                    }
-                }
-            }
-
-            if (centerOnPlane && latestPosition) {
-                map.setView(L.latLng(latestPosition[0], latestPosition[1]), map.getZoom());
             }
         } catch (e: any) {
             bcast.emit('notification', {
@@ -414,5 +674,102 @@
 
   .tooltip {
     pointer-events: none;
+  }
+
+  // 回放控件样式 (plan01.md)
+  .playback-controls {
+    margin-top: 15px;
+    padding: 10px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 8px;
+  }
+
+  .playback-slider {
+    width: 100%;
+    height: 6px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 3px;
+    outline: none;
+    cursor: pointer;
+
+    &::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      background: #4a9eff;
+      border-radius: 50%;
+      cursor: pointer;
+    }
+
+    &::-moz-range-thumb {
+      width: 16px;
+      height: 16px;
+      background: #4a9eff;
+      border-radius: 50%;
+      cursor: pointer;
+      border: none;
+    }
+  }
+
+  .playback-time {
+    text-align: center;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.8);
+    margin: 8px 0;
+    font-family: monospace;
+  }
+
+  .playback-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+    margin-top: 8px;
+  }
+
+  .playback-btn {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: white;
+    transition: background 0.2s, transform 0.1s;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    &:active {
+      transform: scale(0.95);
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    svg {
+      width: 20px;
+      height: 20px;
+    }
+  }
+
+  .play-btn {
+    width: 48px;
+    height: 48px;
+    background: #4a9eff;
+    border-color: #4a9eff;
+
+    &:hover {
+      background: #3a8eef;
+    }
+
+    svg {
+      width: 24px;
+      height: 24px;
+    }
   }
 </style>
