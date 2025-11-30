@@ -208,6 +208,7 @@
     function handleSliderInput(event: Event) {
         const target = event.target as HTMLInputElement;
         const idx = parseInt(target.value, 10);
+        if (isNaN(idx)) return;
         playbackIndex = idx;
         isPlaybackMode = true;
         // 仅移动飞机图标，不重绘轨迹线
@@ -219,6 +220,7 @@
     function handleSliderChange(event: Event) {
         const target = event.target as HTMLInputElement;
         const idx = parseInt(target.value, 10);
+        if (isNaN(idx)) return;
         playbackIndex = idx;
         isPlaybackMode = true;
         // 重绘轨迹线
@@ -288,6 +290,9 @@
                 playbackIndex--;
                 updatePlanePosition(currentTracks[playbackIndex]);
                 updateTrackVisibility(playbackIndex);
+            } else {
+                // 已到达起点，停止定时器
+                handleBackMouseUp();
             }
         }, 100); // 10 points per second
     }
@@ -315,6 +320,9 @@
                 playbackIndex++;
                 updatePlanePosition(currentTracks[playbackIndex]);
                 updateTrackVisibility(playbackIndex);
+            } else {
+                // 已到达末尾，停止定时器
+                handleForwardMouseUp();
             }
         }, 100); // 10 points per second
     }
