@@ -34,6 +34,7 @@
 
     <div class="btn-row">
         <button class="button button--variant-blue size-m"
+                disabled={isFetching}
                 on:click={() => { if (!isPolling) startPolling(); else stopPolling(false); }}>
             { isPolling ? 'Deactivate' : 'Activate' }
         </button>
@@ -86,7 +87,11 @@
 
     // 轮询与跟踪状态
     let isPolling = false;
+    let isFetching = false; // 新增：用于防止重复点击
     let pollTimer: number | null = null;
+    let noNewDataSince: number | null = null; // 新增：用于超时检查
+    const POLLING_TIMEOUT_MS = 30000; // 30秒超时
+
     let centerOnPlane = false;
     let hasData = false;
     let lastPollOk = false;
@@ -131,21 +136,39 @@
     });
 
     function startPolling() {
-        if (isPolling) return;
-        if (!props.baseURL || !props.flightID_planeID) return;
-        // 首次成功后才进入轮询并切换按钮
-        fetchPlaneTrack(props.flightID_planeID).then(() => {
-            isPolling = true;
-            pollTimer = window.setInterval(async () => {
-                try {
-                    await fetchPlaneTrack(props.flightID_planeID);
-                } catch (e) {
-                    stopPolling(true);
-                }
-            }, pollingIntervalMs);
-        }).catch(() => {
-            stopPolling(true);
-        });
+        if (isPolling || isFetching) return;
+        if (!props.baseURL || !props.flightID_planeID) {
+            bcast.emit('notification', {
+                type: 'error',
+                title: 'Plugin Error',
+                text: 'Please provide Base URL and FlightID_PlaneID.',
+                duration: 5000,
+            });
+            return;
+        }
+
+        isPolling = true;
+        noNewDataSince = Date.now(); // 开始计时
+
+        const poll = async () => {
+            // 检查超时
+            if (noNewDataSince && Date.now() - noNewDataSince > POLLING_TIMEOUT_MS) {
+                bcast.emit('notification', {
+                    type: 'info',
+                    title: 'Polling Stopped',
+                    text: 'No new data for 30 seconds.',
+                    duration: 5000,
+                });
+                stopPolling(false);
+                return;
+            }
+
+            await fetchPlaneTrack(props.flightID_planeID);
+        };
+
+        // 立即执行一次，然后设置定时器
+        poll();
+        pollTimer = window.setInterval(poll, pollingIntervalMs);
     }
 
     function stopPolling(dueToError: boolean) {
@@ -154,6 +177,9 @@
             pollTimer = null;
         }
         isPolling = false;
+        isFetching = false; // 确保 fetching 状态也被重置
+        noNewDataSince = null; // 重置计时器
+
         if (dueToError) {
             lastPollOk = false;
             centerOnPlane = false;
@@ -180,22 +206,15 @@
         L.geoJSON(data, {
             pointToLayer: (feature, latlng) => {
                 const radius = calc_circle_radius();
-                // 自定义 Point 类型的样式
-                if (feature.geometry.type === 'Point') {
-                    const color = feature.properties.color || 'rgba(0, 255, 0, 0.5)';
-                    return L.circleMarker(latlng, {
-                        // radius: 10, // 小圆圈的半径
-                        radius: radius, // 小圆圈的半径
-                        // fillColor: 'rgba(0, 255, 0, 0.5)', // 绿色半透明
-                        // color: 'rgba(0, 255, 0, 0.5)', // 边框颜色与填充颜色一致
-                        fillColor: color, // 绿色半透明
-                        color: color, // 边框颜色与填充颜色一致
-                        weight: 2, // 边框宽度
-                        opacity: 1, // 边框不透明度
-                        fillOpacity: 0.5, // 填充透明度
-                    });
-                }
-                return null; // 非 Point 类型不处理
+                const color = feature.properties.color || 'rgba(0, 255, 0, 0.5)';
+                return L.circleMarker(latlng, {
+                    radius: radius, // 小圆圈的半径
+                    fillColor: color, // 绿色半透明
+                    color: color, // 边框颜色与填充颜色一致
+                    weight: 2, // 边框宽度
+                    opacity: 1, // 边框不透明度
+                    fillOpacity: 0.5, // 填充透明度
+                });
             },
             onEachFeature: (feature, layer) => {
                 // 为每个特征添加 tooltip
@@ -255,96 +274,124 @@
     }
 
     async function fetchPlaneTrack(flightID_planeID: string): Promise<void> {
-        // 如果 flightID_planeID 中包含特殊字符反斜杠 '\'，需要进行编码
-        let trackFilename = flightID_planeID;
-        if (flightID_planeID.includes('\\')) {
-            trackFilename = encodeURIComponent(flightID_planeID);
-        }
-        const apiURL = `${props.baseURL}/track/${trackFilename}/all`;
-        const previousTracks = PLANE_TRACK_STORE.get(flightID_planeID) || [];
-        const lastTrack = previousTracks.length > 0 ? previousTracks[previousTracks.length - 1] : null;
-        console.log('Fetching from', apiURL, 'with last track', lastTrack);
-        const lastDtParam = lastTrack ? `?last_dt=${new Date(lastTrack.timestamp * 1e3).toISOString().split('.')[0]}` : '';
-        const resp = await fetch(apiURL + lastDtParam);
-        if (!resp.ok) throw new Error(`HTTP error! status: ${resp.status}`);
-        const data: PlaneResult = await resp.json();
+        if (isFetching) return; // 如果正在请求，则跳过本次轮询
 
-        const tracks = (data.tracks || []) as PlaneTrack[];
-        if (tracks.length > 0) {
-            previousTracks.push(...tracks);
-            PLANE_TRACK_STORE.set(flightID_planeID, previousTracks);
-        }
+        isFetching = true;
 
-        latestTrack = trackToString(data);
-
-        // 更新折线
-        const trackPoints = previousTracks.map(t => {
-            // 按高度修改颜色，取值范围 [0, 6000]
-            const altitudeRatio = Math.min(t.alt / 6000, 1); // 限制最大值为 1
-            const hue = (1 - altitudeRatio) * 120; // 高度越高，越红（0），高度越低，越绿（120）
-            const color = `hsl(${hue}, 100%, 50%)`; // 固定明度为 50%
-
-            return {
-                latLng: L.latLng(t.lat, t.lon, t.alt),
-                color,
-            };
-        });
-
-        // 清理其它飞机图层
-        PLANE_LAYER_STORE.forEach((value, key) => {
-            if (key !== flightID_planeID) {
-                map.removeLayer(value);
-                PLANE_LAYER_STORE.delete(key);
+        try {
+            // 如果 flightID_planeID 中包含特殊字符反斜杠 '\'，需要进行编码
+            let trackFilename = flightID_planeID;
+            if (flightID_planeID.includes('\\')) {
+                trackFilename = encodeURIComponent(flightID_planeID);
             }
-        });
+            const apiURL = `${props.baseURL}/track/${trackFilename}/all`;
+            const previousTracks = PLANE_TRACK_STORE.get(flightID_planeID) || [];
+            const lastTrack = previousTracks.length > 0 ? previousTracks[previousTracks.length - 1] : null;
+            console.log('Fetching from', apiURL, 'with last track', lastTrack);
+            const lastDtParam = lastTrack ? `?last_dt=${new Date(lastTrack.timestamp * 1e3).toISOString().split('.')[0]}` : '';
+            const resp = await fetch(apiURL + lastDtParam);
 
-        // 使用多个 Polyline 实现分段着色
-        trackPoints.reduce((prev, curr) => {
-            if (prev) {
-
-                const segment = L.polyline([prev.latLng, curr.latLng], {
-                    color: prev.color,
-                    weight: 2,
+            if (!resp.ok) {
+                const errorText = await resp.text();
+                bcast.emit('notification', {
+                    type: 'error',
+                    title: 'Fetch Error',
+                    text: `HTTP ${resp.status}: ${errorText || resp.statusText}`,
+                    duration: 5000,
                 });
-                segment.addTo(map);
-                PLANE_LAYER_STORE.set(flightID_planeID, segment);
+                lastPollOk = false;
+                return;
             }
-            return curr;
-        }, null);
 
-        // 最新位置与飞机标记
-        if (previousTracks.length > 0) {
-            const last = previousTracks[previousTracks.length - 1];
-            latestPosition = [last.lat, last.lon];
+            const data: PlaneResult = await resp.json();
+            const tracks = (data.tracks || []) as PlaneTrack[];
 
-            // 若切换了 flightID_planeID，移除旧标记
-            if (currentMarkerPlaneId && currentMarkerPlaneId !== flightID_planeID && planeMarker) {
-                map.removeLayer(planeMarker);
-                planeMarker = null;
+            if (tracks.length > 0) {
+                noNewDataSince = Date.now(); // 收到新数据，重置计时器
+                previousTracks.push(...tracks);
+                PLANE_TRACK_STORE.set(flightID_planeID, previousTracks);
+                hasData = true;
             }
-            if (!planeMarker) {
-                planeMarker = L.marker(L.latLng(last.lat, last.lon), { icon: createPlaneIcon() });
-                planeMarker.addTo(map);
-                currentMarkerPlaneId = flightID_planeID;
-            } else {
-                planeMarker.setLatLng([last.lat, last.lon]);
-            }
-            // 设置朝向
-            const el = planeMarker.getElement();
-            if (el) {
-                const rot = el.querySelector('.plane-rot') as HTMLElement | null;
-                if (rot) {
-                    rot.style.transformOrigin = '50% 50%';
-                    rot.style.transform = `rotate(${last.heading}deg)`;
+
+            latestTrack = trackToString(data);
+            lastPollOk = true;
+
+            // 更新折线
+            const trackPoints = previousTracks.map(t => {
+                // 按高度修改颜色，取值范围 [0, 6000]
+                const altitudeRatio = Math.min(t.alt / 6000, 1); // 限制最大值为 1
+                const hue = (1 - altitudeRatio) * 120; // 高度越高，越红（0），高度越低，越绿（120）
+                const color = `hsl(${hue}, 100%, 50%)`; // 固定明度为 50%
+
+                return {
+                    latLng: L.latLng(t.lat, t.lon, t.alt),
+                    color,
+                };
+            });
+
+            // 清理其它飞机图层
+            PLANE_LAYER_STORE.forEach((value, key) => {
+                if (key !== flightID_planeID) {
+                    map.removeLayer(value);
+                    PLANE_LAYER_STORE.delete(key);
+                }
+            });
+
+            // 使用多个 Polyline 实现分段着色
+            trackPoints.reduce((prev, curr) => {
+                if (prev) {
+
+                    const segment = L.polyline([prev.latLng, curr.latLng], {
+                        color: prev.color,
+                        weight: 2,
+                    });
+                    segment.addTo(map);
+                    PLANE_LAYER_STORE.set(flightID_planeID, segment);
+                }
+                return curr;
+            }, null as { latLng: L.LatLng; color: string; } | null);
+
+            // 最新位置与飞机标记
+            if (previousTracks.length > 0) {
+                const last = previousTracks[previousTracks.length - 1];
+                latestPosition = [last.lat, last.lon];
+
+                // 若切换了 flightID_planeID，移除旧标记
+                if (currentMarkerPlaneId && currentMarkerPlaneId !== flightID_planeID && planeMarker) {
+                    map.removeLayer(planeMarker);
+                    planeMarker = null;
+                }
+                if (!planeMarker) {
+                    planeMarker = L.marker(L.latLng(last.lat, last.lon), { icon: createPlaneIcon() });
+                    planeMarker.addTo(map);
+                    currentMarkerPlaneId = flightID_planeID;
+                } else {
+                    planeMarker.setLatLng([last.lat, last.lon]);
+                }
+                // 设置朝向
+                const el = planeMarker.getElement();
+                if (el) {
+                    const rot = el.querySelector('.plane-rot') as HTMLElement | null;
+                    if (rot) {
+                        rot.style.transformOrigin = '50% 50%';
+                        rot.style.transform = `rotate(${last.heading}deg)`;
+                    }
                 }
             }
-        }
 
-        hasData = previousTracks.length > 0;
-        lastPollOk = true;
-
-        if (centerOnPlane && latestPosition) {
-            map.setView(L.latLng(latestPosition[0], latestPosition[1]), map.getZoom());
+            if (centerOnPlane && latestPosition) {
+                map.setView(L.latLng(latestPosition[0], latestPosition[1]), map.getZoom());
+            }
+        } catch (e: any) {
+            bcast.emit('notification', {
+                type: 'error',
+                title: 'Fetch Failed',
+                text: e.message,
+                duration: 5000,
+            });
+            lastPollOk = false;
+        } finally {
+            isFetching = false;
         }
     }
 </script>
