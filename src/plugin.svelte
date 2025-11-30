@@ -602,7 +602,7 @@
             // 如果不在回放模式，使用 updateMapDisplay 更新视图
             if (!isPlaybackMode) {
                 // 更新 playbackIndex 到最新点
-                playbackIndex = previousTracks.length - 1;
+                playbackIndex = Math.max(0, previousTracks.length - 1);
                 
                 // 先确保飞机标记存在
                 if (previousTracks.length > 0) {
