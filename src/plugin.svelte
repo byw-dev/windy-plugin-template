@@ -193,13 +193,15 @@
     /**
      * 统一的地图显示更新函数
      * @param isDragging - 是否正在拖动滑块（true时只移动飞机，不重绘轨迹线）
+     * @param tracksOverride - 可选，直接传入轨迹数据（避免响应式延迟问题）
+     * @param indexOverride - 可选，直接传入索引（避免响应式延迟问题）
      */
-    function updateMapDisplay(isDragging = false) {
-        const tracks = currentTracks;
+    function updateMapDisplay(isDragging = false, tracksOverride?: PlaneTrack[], indexOverride?: number) {
+        const tracks = tracksOverride || currentTracks;
         if (tracks.length === 0) return;
 
         // 获取当前有效索引
-        const idx = effectiveIndex;
+        const idx = indexOverride !== undefined ? indexOverride : effectiveIndex;
         if (idx < 0 || idx >= tracks.length) return;
 
         const currentTrack = tracks[idx];
@@ -621,8 +623,8 @@
                     }
                 }
 
-                // 使用统一的渲染函数更新显示
-                updateMapDisplay(false);
+                // 使用统一的渲染函数更新显示（直接传入轨迹数据和索引，避免响应式延迟）
+                updateMapDisplay(false, previousTracks, previousTracks.length - 1);
 
                 if (centerOnPlane && latestPosition) {
                     map.setView(L.latLng(latestPosition[0], latestPosition[1]), map.getZoom());
