@@ -51,13 +51,13 @@
         {/if}
     </div>
 
-    {#if hasData}
+    {#if hasData && currentTracks.length > 0}
         <div class="playback-controls">
             <input
                 type="range"
                 class="playback-slider"
                 min="0"
-                max={currentTracks.length - 1}
+                max={sliderMax}
                 bind:value={playbackIndex}
                 on:input={handleSliderInput}
                 on:change={handleSliderChange}
@@ -143,6 +143,9 @@
     const PLANE_TRACK_STORE: Map<string, PlaneTrack[]> = new Map();
     const PLANE_LAYER_STORE: Map<string, L.Polyline> = new Map();
 
+    // 用于触发 Svelte 响应式更新的计数器（因为 Map 变化不会自动触发响应式）
+    let trackStoreVersion = 0;
+
     let latestTrack: string = '无事发生';
 
     // 轮询与跟踪状态
@@ -167,15 +170,17 @@
 
     // 回放状态 (plan01.md 2.1)
     let isPlaybackMode = false;      // 模式开关：false=实时模式, true=回放模式
-    let playbackIndex = -1;          // 当前轨迹点索引，-1 表示实时模式（最新位置）
+    let playbackIndex = 0;           // 当前轨迹点索引，用于滑块绑定
     let isPlaying = false;           // 播放状态：true=自动播放中, false=暂停
     let playbackTimer: number | null = null;      // 自动播放计时器
     let fastForwardTimer: number | null = null;   // 长按快进/快退计时器
 
-    // 获取当前飞机的轨迹数据
-    $: currentTracks = props.flightID_planeID ? (PLANE_TRACK_STORE.get(props.flightID_planeID) || []) : [];
-    // 计算有效的播放索引（-1时使用最后一个）
-    $: effectiveIndex = playbackIndex === -1 ? (currentTracks.length > 0 ? currentTracks.length - 1 : 0) : playbackIndex;
+    // 获取当前飞机的轨迹数据（依赖 trackStoreVersion 触发响应式更新）
+    $: currentTracks = trackStoreVersion >= 0 && props.flightID_planeID ? (PLANE_TRACK_STORE.get(props.flightID_planeID) || []) : [];
+    // 计算滑块的最大值（至少为0，避免-1）
+    $: sliderMax = Math.max(0, currentTracks.length - 1);
+    // 计算有效的播放索引（实时模式时使用最后一个点）
+    $: effectiveIndex = isPlaybackMode ? Math.min(playbackIndex, sliderMax) : sliderMax;
 
     $: showTrackButton = hasData && lastPollOk;
 
@@ -281,10 +286,6 @@
         isPlaying = !isPlaying;
 
         if (isPlaying) {
-            // 如果索引为-1，从头开始播放
-            if (playbackIndex === -1) {
-                playbackIndex = 0;
-            }
             startPlaybackTimer();
         } else {
             stopPlaybackTimer();
@@ -296,7 +297,7 @@
         if (playbackTimer !== null) return;
 
         playbackTimer = window.setInterval(() => {
-            if (playbackIndex < currentTracks.length - 1) {
+            if (playbackIndex < sliderMax) {
                 playbackIndex++;
                 updateMapDisplay(false);
             } else {
@@ -320,7 +321,7 @@
         stopFastForwardTimer();
         isPlaybackMode = false;
         isPlaying = false;
-        playbackIndex = -1;
+        playbackIndex = sliderMax; // 回到最后一个点
         updateMapDisplay(false);
     }
 
@@ -329,11 +330,6 @@
         isPlaybackMode = true;
         isPlaying = false;
         stopPlaybackTimer();
-
-        // 如果是实时模式，切换到最后一个点
-        if (playbackIndex === -1) {
-            playbackIndex = currentTracks.length - 1;
-        }
 
         if (playbackIndex > 0) {
             playbackIndex--;
@@ -364,12 +360,7 @@
         isPlaying = false;
         stopPlaybackTimer();
 
-        // 如果是实时模式，从头开始
-        if (playbackIndex === -1) {
-            playbackIndex = 0;
-        }
-
-        if (playbackIndex < currentTracks.length - 1) {
+        if (playbackIndex < sliderMax) {
             playbackIndex++;
             updateMapDisplay(false);
         }
@@ -378,7 +369,7 @@
     // 前进按钮长按开始
     function handleForwardMouseDown() {
         fastForwardTimer = window.setInterval(() => {
-            if (playbackIndex < currentTracks.length - 1) {
+            if (playbackIndex < sliderMax) {
                 playbackIndex++;
                 updateMapDisplay(false);
             } else {
@@ -601,6 +592,7 @@
                 noNewDataSince = Date.now(); // 收到新数据，重置计时器
                 previousTracks.push(...tracks);
                 PLANE_TRACK_STORE.set(flightID_planeID, previousTracks);
+                trackStoreVersion++; // 触发 Svelte 响应式更新
                 hasData = true;
             }
 
@@ -609,6 +601,9 @@
 
             // 如果不在回放模式，使用 updateMapDisplay 更新视图
             if (!isPlaybackMode) {
+                // 更新 playbackIndex 到最新点
+                playbackIndex = previousTracks.length - 1;
+                
                 // 先确保飞机标记存在
                 if (previousTracks.length > 0) {
                     const last = previousTracks[previousTracks.length - 1];
