@@ -56,11 +56,16 @@
     // 播放/暂停按钮
     function togglePlayPause() {
         enterPlaybackMode();
-        isPlaying.update(v => !v);
+        
+        // 获取当前状态并切换
+        const wasPlaying = $isPlaying;
+        isPlaying.set(!wasPlaying);
 
-        if ($isPlaying) {
+        if (wasPlaying) {
+            // 之前在播放，现在暂停
             stopPlaybackTimer();
         } else {
+            // 之前暂停，现在开始播放
             startPlaybackTimer();
         }
     }

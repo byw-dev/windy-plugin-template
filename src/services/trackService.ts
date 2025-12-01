@@ -10,11 +10,9 @@ import {
     addTracks,
     getTracks,
     currentPlaneId,
-    sliderMax,
 } from '../stores/trackStore';
 import {
     isPlaybackMode,
-    playbackIndex,
     effectiveIndex,
     updateToLatest,
 } from '../stores/playbackStore';

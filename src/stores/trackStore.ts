@@ -1,7 +1,7 @@
 /**
  * Track Data Store - 管理飞机轨迹数据的状态
  */
-import { writable, derived, get } from 'svelte/store';
+import { writable, derived } from 'svelte/store';
 import type { PlaneTrack } from '../pluginTypes';
 
 // 原始轨迹数据存储 (Map结构用于多飞机支持)
