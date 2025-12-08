@@ -118,6 +118,10 @@
         simulationLayers,
         isSimulated,
     } from './stores/simulationStore';
+    import {
+        isPlaybackMode,
+        playbackIndex,
+    } from './stores/playbackStore';
     
     // 导入 services
     import {
@@ -234,8 +238,9 @@
         simulationLayers.set(layers);
         isSimulated.set(true);
         
-        // 触发地图更新
-        updateMapDisplay();
+        // 触发地图更新，传入当前轨迹和索引以确保状态同步
+        const currentIdx = $isPlaybackMode ? $playbackIndex : tracks.length - 1;
+        updateMapDisplay(false, tracks, currentIdx);
         
         bcast.emit('notification', {
             type: 'success',

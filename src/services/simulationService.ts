@@ -69,6 +69,19 @@ export function computeAirspeed(
 
 /**
  * 根据影响半径 r、时间阈值 t 和相对空速 v_air，计算出受影响区域的面积占比
+ * 
+ * 算法说明：
+ * 此函数计算一个圆形影响区域内满足暴露时间阈值的面积占比。
+ * 粒子在圆内停留的时间取决于它相对于飞机的速度（空速）。
+ * 
+ * 几何模型：
+ * - 影响区域是半径为 r 的圆
+ * - 粒子以速度 v 相对于圆心移动
+ * - 只有暴露时间 >= t 的粒子才被认为"受影响"
+ * - L = t * |v| 是粒子在时间 t 内移动的距离
+ * - 当 L >= 2r 时，粒子穿过圆的最大距离不足 t 秒，返回 0
+ * - 否则，计算满足条件的区域面积（椭圆形区域的近似）
+ * 
  * @param r - 影响半径 (米)
  * @param t - 时间阈值 (秒)
  * @param v - 相对空速向量
@@ -118,10 +131,10 @@ export function runSimulation(
             // 根据面积占比选择颜色
             // 将 frac (0-1) 映射到颜色索引
             const percentage = frac * 100;
-            let colorIndex = Math.floor(percentage / 10);
-            if (colorIndex >= colorMap.length) {
-                colorIndex = colorMap.length - 1;
-            }
+            const colorIndex = Math.min(
+                Math.floor(percentage / 10),
+                colorMap.length - 1
+            );
             const color = colorMap[colorIndex];
             
             // 风向转换：风的来源方向 -> 风的去向

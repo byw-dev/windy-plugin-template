@@ -38,6 +38,9 @@ let currentMarkerPlaneId: string | null = null;
 // 模拟图层组
 const simulationLayerGroup = L.layerGroup();
 
+// 常量：每度纬度对应的米数（近似值）
+const METERS_PER_DEGREE_LAT = 111320;
+
 /**
  * 将轨迹数据转换为显示字符串
  */
@@ -145,9 +148,6 @@ function updateSimulationLayers(currentPlaybackTime: number): void {
     // 获取模拟图层数据
     const layers = get(simulationLayers);
     
-    // 常量：每度纬度对应的米数（近似值）
-    const metersPerDegreeLat = 111320;
-    
     // 遍历所有模拟图层
     for (const layer of layers) {
         // 只显示时间戳小于等于当前时间的图层
@@ -159,9 +159,12 @@ function updateSimulationLayers(currentPlaybackTime: number): void {
             const dx = layer.windVector.x * deltaT;
             const dy = layer.windVector.y * deltaT;
             
+            // 计算纬度的余弦值（用于经度转换）
+            const cosLat = Math.cos(layer.lat * Math.PI / 180);
+            
             // 转换为经纬度偏移
-            const latOffset = dy / metersPerDegreeLat;
-            const lonOffset = dx / (metersPerDegreeLat * Math.cos(layer.lat * Math.PI / 180));
+            const latOffset = dy / METERS_PER_DEGREE_LAT;
+            const lonOffset = dx / (METERS_PER_DEGREE_LAT * cosLat);
             
             // 计算新位置
             const newLat = layer.lat + latOffset;
