@@ -4,6 +4,9 @@
 import type { PlaneTrack } from '../pluginTypes';
 import type { Vec2, SimulationLayer } from '../stores/simulationStore';
 
+// 常量定义
+const DEG_TO_RAD = Math.PI / 180;
+
 /**
  * 色卡定义 (0为灰色，之后为冷暖渐变)
  * 用于根据暴露时间显示不同的颜色。
@@ -32,7 +35,7 @@ export function toVector(speed: number, heading: number): Vec2 {
     // 将度数转换为弧度
     // 航向：0度为北，顺时针；数学角度：0度为东，逆时针
     // 转换：数学角度 = 90 - 航向
-    const angleRad = (90 - heading) * (Math.PI / 180);
+    const angleRad = (90 - heading) * DEG_TO_RAD;
     return {
         x: speed * Math.cos(angleRad),
         y: speed * Math.sin(angleRad)
@@ -106,6 +109,17 @@ export function affectedAreaFraction(r: number, t: number, v: Vec2): number {
 }
 
 /**
+ * 检查轨迹点是否有效用于模拟
+ * @param track - 轨迹点
+ * @returns 是否有效
+ */
+function isValidTrackForSimulation(track: PlaneTrack): boolean {
+    return track.speed > 0 && 
+           track.ws !== undefined && 
+           track.wd !== undefined;
+}
+
+/**
  * 运行模拟计算
  * @param tracks - 飞机轨迹数据数组
  * @param radius - 影响半径 (米)
@@ -121,7 +135,7 @@ export function runSimulation(
     
     for (const track of tracks) {
         // 只处理有效的轨迹点（速度大于0且风场数据有效）
-        if (track.speed > 0 && track.ws !== undefined && track.wd !== undefined) {
+        if (isValidTrackForSimulation(track)) {
             // 计算空速
             const airspeed = computeAirspeed(track.speed, track.heading, track.ws, track.wd);
             

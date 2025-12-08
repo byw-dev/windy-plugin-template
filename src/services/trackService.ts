@@ -41,6 +41,9 @@ const simulationLayerGroup = L.layerGroup();
 // 常量：每度纬度对应的米数（近似值）
 const METERS_PER_DEGREE_LAT = 111320;
 
+// 常量：度数转弧度的转换因子
+const DEG_TO_RAD = Math.PI / 180;
+
 /**
  * 将轨迹数据转换为显示字符串
  */
@@ -160,7 +163,7 @@ function updateSimulationLayers(currentPlaybackTime: number): void {
             const dy = layer.windVector.y * deltaT;
             
             // 计算纬度的余弦值（用于经度转换）
-            const cosLat = Math.cos(layer.lat * Math.PI / 180);
+            const cosLat = Math.cos(layer.lat * DEG_TO_RAD);
             
             // 转换为经纬度偏移
             const latOffset = dy / METERS_PER_DEGREE_LAT;
