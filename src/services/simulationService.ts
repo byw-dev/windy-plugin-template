@@ -124,20 +124,34 @@ function isValidTrackForSimulation(track: PlaneTrack): boolean {
  * @param tracks - 飞机轨迹数据数组
  * @param radius - 影响半径 (米)
  * @param threshold - 时间阈值 (秒)
+ * @param useCustomWind - 是否使用用户输入的风速风向
+ * @param customWs - 用户输入的风速 (m/s)
+ * @param customWd - 用户输入的风向 (度)
  * @returns 模拟图层数据数组
  */
 export function runSimulation(
     tracks: PlaneTrack[],
     radius: number,
-    threshold: number
+    threshold: number,
+    useCustomWind: boolean = false,
+    customWs: number = 10,
+    customWd: number = 0
 ): SimulationLayer[] {
     const layers: SimulationLayer[] = [];
     
     for (const track of tracks) {
-        // 只处理有效的轨迹点（速度大于0且风场数据有效）
-        if (isValidTrackForSimulation(track)) {
+        // 根据是否使用自定义风场决定有效性检查
+        const isValid = useCustomWind 
+            ? track.speed > 0  // 使用自定义风场时，只需要飞机速度
+            : isValidTrackForSimulation(track);  // 使用飞机风场时，需要完整数据
+        
+        if (isValid) {
+            // 确定使用的风速和风向
+            const ws = useCustomWind ? customWs : (track.ws || 0);
+            const wd = useCustomWind ? customWd : (track.wd || 0);
+            
             // 计算空速
-            const airspeed = computeAirspeed(track.speed, track.heading, track.ws, track.wd);
+            const airspeed = computeAirspeed(track.speed, track.heading, ws, wd);
             
             // 计算受影响面积占比
             const frac = affectedAreaFraction(radius, threshold, airspeed);
@@ -152,8 +166,8 @@ export function runSimulation(
             const color = colorMap[colorIndex];
             
             // 风向转换：风的来源方向 -> 风的去向
-            const windToDirection = (track.wd + 180) % 360;
-            const windVector = toVector(track.ws, windToDirection);
+            const windToDirection = (wd + 180) % 360;
+            const windVector = toVector(ws, windToDirection);
             
             // 创建模拟图层数据
             layers.push({

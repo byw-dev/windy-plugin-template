@@ -32,3 +32,18 @@ export const simulationLayers = writable<SimulationLayer[]>([]);
  * 标记当前是否处于模拟显示状态
  */
 export const isSimulated = writable<boolean>(false);
+
+/**
+ * 是否使用用户输入的风速风向（false=使用飞机数据）
+ */
+export const useCustomWind = writable<boolean>(false);
+
+/**
+ * 用户输入的风速 (m/s)
+ */
+export const customWindSpeed = writable<number>(10);
+
+/**
+ * 用户输入的风向 (度)
+ */
+export const customWindDirection = writable<number>(0);

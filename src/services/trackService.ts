@@ -44,6 +44,27 @@ const METERS_PER_DEGREE_LAT = 111320;
 // 常量：度数转弧度的转换因子
 const DEG_TO_RAD = Math.PI / 180;
 
+// 存储当前回放时间，用于地图缩放时重绘
+let lastPlaybackTime: number = 0;
+
+// 设置地图缩放事件监听器
+let mapZoomListenerAdded = false;
+
+/**
+ * 初始化地图缩放事件监听器
+ */
+function initMapZoomListener(): void {
+    if (!mapZoomListenerAdded) {
+        map.on('zoomend', () => {
+            // 当地图缩放结束时，重新渲染模拟图层
+            if (get(isSimulated)) {
+                updateSimulationLayers(lastPlaybackTime);
+            }
+        });
+        mapZoomListenerAdded = true;
+    }
+}
+
 /**
  * 将轨迹数据转换为显示字符串
  */
@@ -126,6 +147,9 @@ export function updateMapDisplay(
     // 更新最新位置
     latestPosition.set([currentTrack.lat, currentTrack.lon]);
     
+    // 初始化地图缩放监听器（只需执行一次）
+    initMapZoomListener();
+    
     // 渲染模拟图层
     updateSimulationLayers(currentTrack.timestamp);
 }
@@ -135,6 +159,9 @@ export function updateMapDisplay(
  * @param currentPlaybackTime - 当前回放时间戳
  */
 function updateSimulationLayers(currentPlaybackTime: number): void {
+    // 存储当前回放时间，用于地图缩放时重绘
+    lastPlaybackTime = currentPlaybackTime;
+    
     // 检查是否处于模拟状态
     const simulated = get(isSimulated);
     if (!simulated) {

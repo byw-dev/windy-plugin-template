@@ -77,6 +77,45 @@
                         step="1"
                     />
                 </label>
+                
+                <!-- 风速风向来源切换 -->
+                <div class="wind-source-toggle">
+                    <label class="toggle-label">
+                        <input
+                            type="checkbox"
+                            bind:checked={$useCustomWind}
+                        />
+                        <span>Use Custom Wind</span>
+                    </label>
+                </div>
+                
+                <!-- 自定义风速风向输入 -->
+                {#if $useCustomWind}
+                    <label for="customWindSpeed" class="m-1">
+                        Wind Speed (m/s):
+                        <input
+                            id="customWindSpeed"
+                            type="number"
+                            class="input-small"
+                            bind:value={$customWindSpeed}
+                            min="0"
+                            max="50"
+                            step="0.5"
+                        />
+                    </label>
+                    <label for="customWindDirection" class="m-1">
+                        Wind Direction (°):
+                        <input
+                            id="customWindDirection"
+                            type="number"
+                            class="input-small"
+                            bind:value={$customWindDirection}
+                            min="0"
+                            max="360"
+                            step="5"
+                        />
+                    </label>
+                {/if}
             </div>
             <button
                 class="button button--variant-blue size-m centered mt-10"
@@ -117,6 +156,9 @@
     import {
         simulationLayers,
         isSimulated,
+        useCustomWind,
+        customWindSpeed,
+        customWindDirection,
     } from './stores/simulationStore';
     import {
         isPlaybackMode,
@@ -231,8 +273,15 @@
             return;
         }
 
-        // 运行模拟
-        const layers = runSimulation(tracks, simulationRadius, timeThreshold);
+        // 运行模拟，传入风速风向参数
+        const layers = runSimulation(
+            tracks, 
+            simulationRadius, 
+            timeThreshold,
+            $useCustomWind,
+            $customWindSpeed,
+            $customWindDirection
+        );
         
         // 更新 store
         simulationLayers.set(layers);
@@ -392,6 +441,32 @@
     width: 100px;
     padding: 4px 8px;
     font-size: 12px;
+  }
+
+  .wind-source-toggle {
+    margin: 8px 0;
+    padding: 8px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  }
+
+  .toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.8);
+    cursor: pointer;
+
+    input[type="checkbox"] {
+      cursor: pointer;
+      width: 16px;
+      height: 16px;
+    }
+
+    span {
+      user-select: none;
+    }
   }
 
   .mt-10 {
