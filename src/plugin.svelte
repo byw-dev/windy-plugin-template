@@ -48,6 +48,84 @@
 
     <PlaybackControls />
 
+    <!-- 模拟控制 -->
+    {#if $hasTrackData}
+        <div class="simulation-controls">
+            <h3 class="simulation-title">Weather Modification Simulation</h3>
+            <div class="simulation-inputs">
+                <label for="simulationRadius" class="m-1">
+                    Radius (m):
+                    <input
+                        id="simulationRadius"
+                        type="number"
+                        class="input-small"
+                        bind:value={simulationRadius}
+                        min="100"
+                        max="5000"
+                        step="50"
+                    />
+                </label>
+                <label for="timeThreshold" class="m-1">
+                    Time Threshold (s):
+                    <input
+                        id="timeThreshold"
+                        type="number"
+                        class="input-small"
+                        bind:value={timeThreshold}
+                        min="1"
+                        max="60"
+                        step="1"
+                    />
+                </label>
+                
+                <!-- 风速风向来源切换 -->
+                <div class="wind-source-toggle">
+                    <label class="toggle-label">
+                        <input
+                            type="checkbox"
+                            bind:checked={$useCustomWind}
+                        />
+                        <span>Use Custom Wind</span>
+                    </label>
+                </div>
+                
+                <!-- 自定义风速风向输入 -->
+                {#if $useCustomWind}
+                    <label for="customWindSpeed" class="m-1">
+                        Wind Speed (m/s):
+                        <input
+                            id="customWindSpeed"
+                            type="number"
+                            class="input-small"
+                            bind:value={$customWindSpeed}
+                            min="0"
+                            max="50"
+                            step="0.5"
+                        />
+                    </label>
+                    <label for="customWindDirection" class="m-1">
+                        Wind Direction (°):
+                        <input
+                            id="customWindDirection"
+                            type="number"
+                            class="input-small"
+                            bind:value={$customWindDirection}
+                            min="0"
+                            max="360"
+                            step="5"
+                        />
+                    </label>
+                {/if}
+            </div>
+            <button
+                class="button button--variant-blue size-m centered mt-10"
+                on:click={handleSimulation}
+            >
+                Simulate
+            </button>
+        </div>
+    {/if}
+
     <pre class="text mb-40">{$latestTrackInfo}</pre>
 </section>
 <script lang="ts">
@@ -63,6 +141,7 @@
     import {
         currentPlaneId,
         hasTrackData,
+        getTracks,
     } from './stores/trackStore';
     import {
         isPolling,
@@ -74,18 +153,31 @@
         setPolling,
         resetPollingState,
     } from './stores/pollingStore';
+    import {
+        simulationLayers,
+        isSimulated,
+        useCustomWind,
+        customWindSpeed,
+        customWindDirection,
+    } from './stores/simulationStore';
+    import {
+        isPlaybackMode,
+        playbackIndex,
+    } from './stores/playbackStore';
     
     // 导入 services
     import {
         fetchPlaneTrack,
         removePlaneMarker,
         clearTrackLayers,
+        updateMapDisplay,
     } from './services/trackService';
     import {
         isGeoJsonLoaded,
         loadAsserts,
         unloadAsserts,
     } from './services/geoJsonService';
+    import { runSimulation } from './services/simulationService';
 
     const { title } = config;
 
@@ -98,6 +190,10 @@
     let baseURL = '';
     let flightID_planeID = '';
     let uavAssertID = '';
+
+    // 模拟参数
+    let simulationRadius = 500;
+    let timeThreshold = 10;
 
     // 轮询相关
     let pollTimer: number | null = null;
@@ -152,6 +248,55 @@
         if ($centerOnPlane && $latestPosition) {
             map.setView(L.latLng($latestPosition[0], $latestPosition[1]), map.getZoom());
         }
+    }
+
+    function handleSimulation() {
+        const planeId = $currentPlaneId;
+        if (!planeId) {
+            bcast.emit('notification', {
+                type: 'error',
+                title: 'Simulation Error',
+                text: 'No plane data available.',
+                duration: 5000,
+            });
+            return;
+        }
+
+        const tracks = getTracks(planeId);
+        if (tracks.length === 0) {
+            bcast.emit('notification', {
+                type: 'error',
+                title: 'Simulation Error',
+                text: 'No track data available for simulation.',
+                duration: 5000,
+            });
+            return;
+        }
+
+        // 运行模拟，传入风速风向参数
+        const layers = runSimulation(
+            tracks, 
+            simulationRadius, 
+            timeThreshold,
+            $useCustomWind,
+            $customWindSpeed,
+            $customWindDirection
+        );
+        
+        // 更新 store
+        simulationLayers.set(layers);
+        isSimulated.set(true);
+        
+        // 触发地图更新，传入当前轨迹和索引以确保状态同步
+        const currentIdx = $isPlaybackMode ? $playbackIndex : tracks.length - 1;
+        updateMapDisplay(false, tracks, currentIdx);
+        
+        bcast.emit('notification', {
+            type: 'success',
+            title: 'Simulation Complete',
+            text: `Generated ${layers.length} simulation layers.`,
+            duration: 3000,
+        });
     }
 
     // ========== 轮询逻辑 ==========
@@ -260,5 +405,76 @@
 
   .tooltip {
     pointer-events: none;
+  }
+
+  .simulation-controls {
+    margin-top: 15px;
+    padding: 10px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 8px;
+  }
+
+  .simulation-title {
+    font-size: 14px;
+    font-weight: bold;
+    color: rgba(255, 255, 255, 0.9);
+    margin: 0 0 10px 0;
+    text-align: center;
+  }
+
+  .simulation-inputs {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 10px;
+
+    label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.8);
+    }
+  }
+
+  .input-small {
+    width: 100px;
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+
+  .wind-source-toggle {
+    margin: 8px 0;
+    padding: 8px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  }
+
+  .toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.8);
+    cursor: pointer;
+
+    input[type="checkbox"] {
+      cursor: pointer;
+      width: 16px;
+      height: 16px;
+    }
+
+    span {
+      user-select: none;
+    }
+  }
+
+  .mt-10 {
+    margin-top: 10px;
+  }
+
+  .centered {
+    margin-left: auto;
+    margin-right: auto;
   }
 </style>

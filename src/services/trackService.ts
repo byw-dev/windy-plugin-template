@@ -23,6 +23,10 @@ import {
     latestTrackInfo,
     setFetching,
 } from '../stores/pollingStore';
+import {
+    simulationLayers,
+    isSimulated,
+} from '../stores/simulationStore';
 
 // 地图图层存储
 const PLANE_LAYER_STORE = new Map<string, L.Polyline>();
@@ -30,6 +34,36 @@ const PLANE_LAYER_STORE = new Map<string, L.Polyline>();
 // 飞机标记
 let planeMarker: L.Marker | null = null;
 let currentMarkerPlaneId: string | null = null;
+
+// 模拟图层组
+const simulationLayerGroup = L.layerGroup();
+
+// 常量：每度纬度对应的米数（近似值）
+const METERS_PER_DEGREE_LAT = 111320;
+
+// 常量：度数转弧度的转换因子
+const DEG_TO_RAD = Math.PI / 180;
+
+// 存储当前回放时间，用于地图缩放时重绘
+let lastPlaybackTime: number = 0;
+
+// 设置地图缩放事件监听器
+let mapZoomListenerAdded = false;
+
+/**
+ * 初始化地图缩放事件监听器
+ */
+function initMapZoomListener(): void {
+    if (!mapZoomListenerAdded) {
+        map.on('zoomend', () => {
+            // 当地图缩放结束时，重新渲染模拟图层
+            if (get(isSimulated)) {
+                updateSimulationLayers(lastPlaybackTime);
+            }
+        });
+        mapZoomListenerAdded = true;
+    }
+}
 
 /**
  * 将轨迹数据转换为显示字符串
@@ -112,6 +146,82 @@ export function updateMapDisplay(
 
     // 更新最新位置
     latestPosition.set([currentTrack.lat, currentTrack.lon]);
+    
+    // 初始化地图缩放监听器（只需执行一次）
+    initMapZoomListener();
+    
+    // 渲染模拟图层
+    updateSimulationLayers(currentTrack.timestamp);
+}
+
+/**
+ * 更新模拟图层显示
+ * @param currentPlaybackTime - 当前回放时间戳
+ */
+function updateSimulationLayers(currentPlaybackTime: number): void {
+    // 存储当前回放时间，用于地图缩放时重绘
+    lastPlaybackTime = currentPlaybackTime;
+    
+    // 检查是否处于模拟状态
+    const simulated = get(isSimulated);
+    if (!simulated) {
+        // 如果不在模拟状态，确保图层组被移除
+        if (map.hasLayer(simulationLayerGroup)) {
+            map.removeLayer(simulationLayerGroup);
+        }
+        return;
+    }
+    
+    // 清空图层组
+    simulationLayerGroup.clearLayers();
+    
+    // 获取模拟图层数据
+    const layers = get(simulationLayers);
+    
+    // 遍历所有模拟图层
+    for (const layer of layers) {
+        // 只显示时间戳小于等于当前时间的图层
+        if (layer.timestamp <= currentPlaybackTime) {
+            // 计算时间差（秒）
+            const deltaT = currentPlaybackTime - layer.timestamp;
+            
+            // 根据风速计算位移（米）
+            const dx = layer.windVector.x * deltaT;
+            const dy = layer.windVector.y * deltaT;
+            
+            // 计算纬度的余弦值（用于经度转换）
+            const cosLat = Math.cos(layer.lat * DEG_TO_RAD);
+            
+            // 转换为经纬度偏移
+            const latOffset = dy / METERS_PER_DEGREE_LAT;
+            const lonOffset = dx / (METERS_PER_DEGREE_LAT * cosLat);
+            
+            // 计算新位置
+            const newLat = layer.lat + latOffset;
+            const newLon = layer.lon + lonOffset;
+            
+            // 将颜色转换为CSS格式
+            const colorStr = `rgba(${Math.round(layer.color.r * 255)}, ${Math.round(layer.color.g * 255)}, ${Math.round(layer.color.b * 255)}, ${layer.color.a})`;
+            
+            // 创建圆圈
+            const circle = L.circle([newLat, newLon], {
+                radius: layer.radius,
+                color: colorStr,
+                fillColor: colorStr,
+                fillOpacity: layer.color.a,
+                weight: 1,
+                opacity: layer.color.a
+            });
+            
+            // 添加到图层组
+            circle.addTo(simulationLayerGroup);
+        }
+    }
+    
+    // 确保图层组已添加到地图
+    if (!map.hasLayer(simulationLayerGroup)) {
+        simulationLayerGroup.addTo(map);
+    }
 }
 
 /**
