@@ -2,6 +2,7 @@
  * Polling State Store - 管理轮询状态
  */
 import { writable } from 'svelte/store';
+import type { PlaneTrack } from '../pluginTypes';
 
 // 是否正在轮询
 export const isPolling = writable(false);
@@ -18,8 +19,8 @@ export const centerOnPlane = writable(false);
 // 最新位置
 export const latestPosition = writable<[number, number] | null>(null);
 
-// 最新轨迹信息字符串
-export const latestTrackInfo = writable<string>('无事发生');
+// 当前完整的轨迹数据对象 (支持更丰富的UI显示)
+export const currentTrackData = writable<PlaneTrack | null>(null);
 
 // 重置轮询状态
 export function resetPollingState(): void {

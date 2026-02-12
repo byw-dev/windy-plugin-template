@@ -44,12 +44,20 @@
                 Track
             </button>
         {/if}
+        {#if $hasTrackData}
+            <button class="button size-m"
+                    on:click={handleSimToggle}>
+                { showSimulationControls ? 'Sim-OFF' : 'Sim-ON' }
+            </button>
+        {/if}
     </div>
+
+    <TrackInfoTable />
 
     <PlaybackControls />
 
     <!-- 模拟控制 -->
-    {#if $hasTrackData}
+    {#if $hasTrackData && showSimulationControls}
         <div class="simulation-controls">
             <h3 class="simulation-title">Weather Modification Simulation</h3>
             <div class="simulation-inputs">
@@ -77,7 +85,7 @@
                         step="1"
                     />
                 </label>
-                
+
                 <!-- 风速风向来源切换 -->
                 <div class="wind-source-toggle">
                     <label class="toggle-label">
@@ -88,7 +96,7 @@
                         <span>Use Custom Wind</span>
                     </label>
                 </div>
-                
+
                 <!-- 自定义风速风向输入 -->
                 {#if $useCustomWind}
                     <label for="customWindSpeed" class="m-1">
@@ -126,7 +134,7 @@
         </div>
     {/if}
 
-    <pre class="text mb-40">{$latestTrackInfo}</pre>
+
 </section>
 <script lang="ts">
     /* exported onopen */
@@ -136,7 +144,8 @@
 
     import config from './pluginConfig';
     import PlaybackControls from './components/PlaybackControls.svelte';
-    
+    import TrackInfoTable from './components/TrackInfoTable.svelte';
+
     // 导入 stores
     import {
         currentPlaneId,
@@ -149,7 +158,6 @@
         lastFetchOk,
         centerOnPlane,
         latestPosition,
-        latestTrackInfo,
         setPolling,
         resetPollingState,
     } from './stores/pollingStore';
@@ -164,12 +172,13 @@
         isPlaybackMode,
         playbackIndex,
     } from './stores/playbackStore';
-    
+
     // 导入 services
     import {
         fetchPlaneTrack,
         removePlaneMarker,
         clearTrackLayers,
+        clearSimulationLayersFromMap,
         updateMapDisplay,
     } from './services/trackService';
     import {
@@ -194,6 +203,7 @@
     // 模拟参数
     let simulationRadius = 500;
     let timeThreshold = 10;
+    let showSimulationControls = false;
 
     // 轮询相关
     let pollTimer: number | null = null;
@@ -210,19 +220,22 @@
     function handleBaseURLChange() {
         try {
             localStorage.setItem(LS_BASE_URL_KEY, baseURL || '');
-        } catch (e) {}
+        } catch (e) {
+        }
     }
 
     function handleUavAssertIDChange() {
         try {
             localStorage.setItem(LS_UAV_ASSERT_ID_KEY, uavAssertID || '');
-        } catch (e) {}
+        } catch (e) {
+        }
     }
 
     function handleFlightIDChange() {
         try {
             localStorage.setItem(LS_FLIGHT_ID_PLANE_ID_KEY, flightID_planeID || '');
-        } catch (e) {}
+        } catch (e) {
+        }
         // 更新 store 中的当前飞机ID
         currentPlaneId.set(flightID_planeID);
     }
@@ -250,53 +263,51 @@
         }
     }
 
+    function handleSimToggle() {
+        showSimulationControls = !showSimulationControls;
+        if (!showSimulationControls) {
+            // 当 Sim-OFF 时
+            // 1. 重置模拟状态
+            isSimulated.set(false);
+            // 2. 清空模拟数据
+            simulationLayers.set([]);
+            // 3. 立即清除地图上的图层
+            clearSimulationLayersFromMap();
+        }
+    }
+
     function handleSimulation() {
         const planeId = $currentPlaneId;
         if (!planeId) {
-            bcast.emit('notification', {
-                type: 'error',
-                title: 'Simulation Error',
-                text: 'No plane data available.',
-                duration: 5000,
-            });
+            console.error('Simulation Error: No plane data available.');
             return;
         }
 
         const tracks = getTracks(planeId);
         if (tracks.length === 0) {
-            bcast.emit('notification', {
-                type: 'error',
-                title: 'Simulation Error',
-                text: 'No track data available for simulation.',
-                duration: 5000,
-            });
+            console.error('Simulation Error: No track data available for simulation.');
             return;
         }
 
         // 运行模拟，传入风速风向参数
         const layers = runSimulation(
-            tracks, 
-            simulationRadius, 
+            tracks,
+            simulationRadius,
             timeThreshold,
             $useCustomWind,
             $customWindSpeed,
-            $customWindDirection
+            $customWindDirection,
         );
-        
+
         // 更新 store
         simulationLayers.set(layers);
         isSimulated.set(true);
-        
+
         // 触发地图更新，传入当前轨迹和索引以确保状态同步
         const currentIdx = $isPlaybackMode ? $playbackIndex : tracks.length - 1;
         updateMapDisplay(false, tracks, currentIdx);
-        
-        bcast.emit('notification', {
-            type: 'success',
-            title: 'Simulation Complete',
-            text: `Generated ${layers.length} simulation layers.`,
-            duration: 3000,
-        });
+
+        console.log(`Simulation Complete. Generated ${layers.length} simulation layers.`);
     }
 
     // ========== 轮询逻辑 ==========
@@ -304,30 +315,20 @@
     function startPolling() {
         if ($isPolling || $isFetching) return;
         if (!baseURL || !flightID_planeID) {
-            bcast.emit('notification', {
-                type: 'error',
-                title: 'Plugin Error',
-                text: 'Please provide Base URL and FlightID_PlaneID.',
-                duration: 5000,
-            });
+            console.error('Plugin Error: Please provide Base URL and FlightID_PlaneID.');
             return;
         }
 
         // 设置当前飞机ID
         currentPlaneId.set(flightID_planeID);
-        
+
         setPolling(true);
         noNewDataSince = Date.now();
 
         const poll = async () => {
             // 检查超时
             if (noNewDataSince && Date.now() - noNewDataSince > POLLING_TIMEOUT_MS) {
-                bcast.emit('notification', {
-                    type: 'info',
-                    title: 'Polling Stopped',
-                    text: 'No new data for 30 seconds.',
-                    duration: 5000,
-                });
+                console.log('Polling Stopped: No new data for 30 seconds.');
                 stopPolling(false);
                 return;
             }
@@ -335,7 +336,7 @@
             const hasNewData = await fetchPlaneTrack(baseURL, flightID_planeID);
             if (hasNewData) {
                 noNewDataSince = Date.now();
-                
+
                 // 如果启用了跟踪，则居中显示
                 if ($centerOnPlane && $latestPosition) {
                     map.setView(L.latLng($latestPosition[0], $latestPosition[1]), map.getZoom());
@@ -373,10 +374,11 @@
             if (bu !== null) baseURL = bu;
             if (pid !== null) flightID_planeID = pid;
             if (uid !== null) uavAssertID = uid;
-            
+
             // 初始化 store
             if (pid) currentPlaneId.set(pid);
-        } catch (e) {}
+        } catch (e) {
+        }
         console.log('Plugin mounted');
     });
 

@@ -18,6 +18,23 @@ function calcCircleRadius(): number {
     return Math.max(2, 8 * (currentZoom / 10));
 }
 
+function createCircleIcon(radius: number, color: string): L.DivIcon {
+    const size = radius * 2;
+    return new L.DivIcon({
+        className: 'uav-circle-icon',
+        html: `<div style="
+            width: ${size}px;
+            height: ${size}px;
+            background-color: ${color};
+            border-radius: 50%;
+            border: 2px solid ${color};
+            opacity: 0.8;
+            box-sizing: border-box;"></div>`,
+        iconSize: [size, size],
+        iconAnchor: [radius, radius]
+    });
+}
+
 /**
  * 加载 GeoJSON 断言数据
  */
@@ -33,17 +50,14 @@ export async function loadAsserts(baseURL: string, uavAssertID: string): Promise
     const data = await resp.json();
 
     // 处理 GeoJSON 数据
-    const layer = L.geoJSON(data, {
+    const layer = new L.GeoJSON(data, {
+        // Prevents crash in some Leaflet versions when style is undefined
+        style: () => ({}),
         pointToLayer: (feature, latlng) => {
             const radius = calcCircleRadius();
             const color = feature.properties.color || 'rgba(0, 255, 0, 0.5)';
-            return L.circleMarker(latlng, {
-                radius: radius,
-                fillColor: color,
-                color: color,
-                weight: 2,
-                opacity: 1,
-                fillOpacity: 0.5,
+            return new L.Marker(latlng, {
+                icon: createCircleIcon(radius, color)
             });
         },
         onEachFeature: (feature, layer) => {
@@ -62,14 +76,7 @@ export async function loadAsserts(baseURL: string, uavAssertID: string): Promise
     geoJsonLayers.push(layer);
     isGeoJsonLoaded.set(true);
 
-    // 确保 Point 类型在最上层
-    map.eachLayer((l) => {
-        if (l instanceof L.CircleMarker) {
-            l.bringToFront();
-        }
-    });
-
-    // 动态调整 CircleMarker 的大小
+    // 动态调整 Marker 的大小
     map.on('zoomend', handleZoomEnd);
 
     // 按 GeoJson 里的第一个 Point 点居中显示地图
@@ -79,9 +86,9 @@ export async function loadAsserts(baseURL: string, uavAssertID: string): Promise
             const [lon, lat] = firstPoint.geometry.coordinates;
             const currentZoom = map.getZoom();
             if (currentZoom < 8) {
-                map.setView(L.latLng(lat, lon), 8);
+                map.setView(new L.LatLng(lat, lon), 8);
             } else {
-                map.setView(L.latLng(lat, lon), currentZoom);
+                map.setView(new L.LatLng(lat, lon), currentZoom);
             }
         }
     }
@@ -91,11 +98,16 @@ export async function loadAsserts(baseURL: string, uavAssertID: string): Promise
  * 处理缩放事件
  */
 function handleZoomEnd(): void {
-    map.eachLayer((layer) => {
-        if (layer instanceof L.CircleMarker) {
-            const newRadius = calcCircleRadius();
-            layer.setRadius(newRadius);
-        }
+    const newRadius = calcCircleRadius();
+
+    geoJsonLayers.forEach(geoJsonLayer => {
+        geoJsonLayer.eachLayer((layer: any) => {
+            if (layer instanceof L.Marker) {
+                const feature = layer.feature;
+                const color = feature?.properties?.color || 'rgba(0, 255, 0, 0.5)';
+                layer.setIcon(createCircleIcon(newRadius, color));
+            }
+        });
     });
 }
 
@@ -108,16 +120,10 @@ export function unloadAsserts(): void {
         map.removeLayer(layer);
     });
     geoJsonLayers = [];
-    
-    // 也移除其他可能的 GeoJSON 图层
-    map.eachLayer((layer) => {
-        if (layer instanceof L.GeoJSON) {
-            map.removeLayer(layer);
-        }
-    });
-    
+
+
     // 移除缩放事件监听
     map.off('zoomend', handleZoomEnd);
-    
+
     isGeoJsonLoaded.set(false);
 }

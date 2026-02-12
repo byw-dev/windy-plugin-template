@@ -2,7 +2,7 @@ import type { ExternalPluginConfig } from '@windy/interfaces';
 
 const config: ExternalPluginConfig = {
     name: 'windy-plugin-uav-wmocs',
-    version: '0.3.0',
+    version: '0.4.0',
     icon: '🚁',
     title: 'UAV WMOCS',
     description: 'Used to display WMOCS data for UAV operations',
